@@ -1,5 +1,8 @@
 import os
-from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, flash
+import io
+import qrcode
+import netifaces
+from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
 
 UPLOAD_FOLDER = 'uploads'
@@ -24,6 +27,12 @@ HTML = '''
   <header style="padding:2rem 1rem 1rem 1rem;">
     <h1 style="color:var(--primary);">Rainbow ファイル転送</h1>
     <p>この端末 ⇔ 他端末（スマホ/PC）でファイルをやり取りできます</p>
+    <div style="margin-top:1rem;">
+      <span>スマホからアクセス：</span>
+      <img src="/qr" alt="QRコード" style="vertical-align:middle;width:120px;height:120px;border:1px solid #ddd;background:#fff;">
+      <br>
+      <span style="font-size:0.9em;color:#555;">URL: {{ access_url }}</span>
+    </div>
   </header>
   <main style="padding:2rem;max-width:700px;margin:auto;">
     <section>
@@ -62,6 +71,17 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def get_local_ip():
+    # Wi-Fiや有線LANのローカルIPを自動取得
+    for iface in netifaces.interfaces():
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_INET in addrs:
+            for addr in addrs[netifaces.AF_INET]:
+                ip = addr.get('addr')
+                if ip and not ip.startswith('127.'):
+                    return ip
+    return '127.0.0.1'
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -81,7 +101,19 @@ def index():
             flash('許可されていないファイル形式です')
             return redirect(request.url)
     files = os.listdir(app.config['UPLOAD_FOLDER'])
-    return render_template_string(HTML, files=files)
+    local_ip = get_local_ip()
+    access_url = f'http://{local_ip}:5000/'
+    return render_template_string(HTML, files=files, access_url=access_url)
+
+@app.route('/qr')
+def qr():
+    local_ip = get_local_ip()
+    url = f'http://{local_ip}:5000/'
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return send_file(buf, mimetype='image/png')
 
 @app.route('/download/<filename>')
 def download_file(filename):
