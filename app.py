@@ -2,7 +2,8 @@ import os
 import io
 import qrcode
 import netifaces
-from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, flash, send_file
+import secrets
+from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, flash, send_file, jsonify, abort
 from werkzeug.utils import secure_filename
 
 UPLOAD_FOLDER = 'uploads'
@@ -87,7 +88,8 @@ HTML = '''
       <ul class="list">
         {% for filename in files %}
         <li class="list-item">
-          <a href="/download/{{ filename }}" class="btn btn-secondary" download onclick="showDownloadProgress(event, '{{ filename }}')">{{ filename }}</a>
+          <a href="#" class="btn btn-secondary" onclick="showPinDialog('{{ filename }}', '{{ pins[filename] }}')">{{ filename }}</a>
+          <span style="margin-left:0.5em;font-size:0.9em;color:#888;">PIN: <span style="user-select:all;">{{ pins[filename] }}</span></span>
           <form method="post" action="/delete/{{ filename }}" style="display:inline;margin-left:1em;">
             <button class="btn btn-error" type="submit" onclick="return confirm('本当に削除しますか？');">削除</button>
           </form>
@@ -99,24 +101,68 @@ HTML = '''
       <div id="dl-progress-container" style="width:100%;background:#eee;border-radius:6px;display:none;margin:1em 0;">
         <div id="dl-progress-bar" style="height:12px;width:0;background:var(--success);border-radius:6px;"></div>
       </div>
+      <div id="pin-dialog" style="display:none;position:fixed;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.3);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:#fff;padding:2em;border-radius:12px;min-width:280px;box-shadow:0 2px 16px #0002;">
+          <h3>PINを入力してください</h3>
+          <input id="pin-input" type="text" maxlength="6" style="font-size:1.5em;text-align:center;width:100px;">
+          <input id="pin-filename" type="hidden">
+          <div style="margin-top:1em;text-align:right;">
+            <button onclick="closePinDialog()" class="btn btn-secondary">キャンセル</button>
+            <button onclick="submitPin()" class="btn btn-primary">ダウンロード</button>
+          </div>
+          <div id="pin-error" style="color:red;margin-top:0.5em;display:none;"></div>
+        </div>
+      </div>
       <script>
-      // ダウンロード進捗バー（簡易）
-      function showDownloadProgress(e, filename) {
+      // PINダイアログ
+      function showPinDialog(filename, pin) {
+        document.getElementById('pin-dialog').style.display = 'flex';
+        document.getElementById('pin-input').value = '';
+        document.getElementById('pin-filename').value = filename;
+        document.getElementById('pin-error').style.display = 'none';
+      }
+      function closePinDialog() {
+        document.getElementById('pin-dialog').style.display = 'none';
+      }
+      function submitPin() {
+        const filename = document.getElementById('pin-filename').value;
+        const pin = document.getElementById('pin-input').value;
         const bar = document.getElementById('dl-progress-bar');
         const container = document.getElementById('dl-progress-container');
         bar.style.width = '0';
         container.style.display = 'block';
-        fetch(`/download/${filename}`).then(resp => {
+        fetch(`/download/${filename}?pin=${pin}`).then(resp => {
+          if (resp.status === 403) {
+            document.getElementById('pin-error').textContent = 'PINが違います';
+            document.getElementById('pin-error').style.display = 'block';
+            container.style.display = 'none';
+            return;
+          }
+          if (!resp.ok) {
+            document.getElementById('pin-error').textContent = 'ダウンロード失敗';
+            document.getElementById('pin-error').style.display = 'block';
+            container.style.display = 'none';
+            return;
+          }
           const reader = resp.body.getReader();
           const contentLength = +resp.headers.get('Content-Length');
           let received = 0;
+          let chunks = [];
           function pump() {
             return reader.read().then(({done, value}) => {
               if (done) {
                 container.style.display = 'none';
+                // ダウンロード保存
+                const blob = new Blob(chunks);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                a.click();
+                closePinDialog();
                 return;
               }
               received += value.length;
+              chunks.push(value);
               bar.style.width = (received / contentLength * 100) + '%';
               return pump();
             });
@@ -160,6 +206,7 @@ def get_local_ip():
     return '127.0.0.1'
 
 HISTORY_FILE = 'transfer_history.json'
+PIN_FILE = 'file_pins.json'
 
 # 転送履歴の保存
 import json
@@ -184,6 +231,32 @@ def load_history():
     except Exception:
         return []
 
+# ファイルごとのPIN管理
+
+def get_pins():
+    try:
+        with open(PIN_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def set_pin(filename, pin):
+    pins = get_pins()
+    pins[filename] = pin
+    with open(PIN_FILE, 'w', encoding='utf-8') as f:
+        json.dump(pins, f, ensure_ascii=False)
+
+def get_pin(filename):
+    pins = get_pins()
+    return pins.get(filename)
+
+def del_pin(filename):
+    pins = get_pins()
+    if filename in pins:
+        del pins[filename]
+        with open(PIN_FILE, 'w', encoding='utf-8') as f:
+            json.dump(pins, f, ensure_ascii=False)
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -199,7 +272,9 @@ def index():
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
                 file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                add_history(f"受信: {filename}")
+                pin = str(secrets.randbelow(900000) + 100000)  # 6桁PIN
+                set_pin(filename, pin)
+                add_history(f"受信: {filename} (PIN: {pin})")
                 saved += 1
         if saved:
             flash(f'{saved} ファイルを受信しました')
@@ -210,7 +285,8 @@ def index():
     local_ip = get_local_ip()
     access_url = f'http://{local_ip}:5000/'
     history = load_history()
-    return render_template_string(HTML, files=files, access_url=access_url, history=history)
+    pins = {f: get_pin(f) for f in files}
+    return render_template_string(HTML, files=files, access_url=access_url, history=history, pins=pins)
 
 
 @app.route('/qr')
@@ -225,7 +301,11 @@ def qr():
 
 @app.route('/download/<filename>')
 def download_file(filename):
-    add_history(f"ダウンロード: {filename}")
+    pin = request.args.get('pin')
+    expected = get_pin(filename)
+    if expected is None or pin != expected:
+        return ('', 403)
+    add_history(f"ダウンロード: {filename} (PIN: {pin})")
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 @app.route('/delete/<filename>', methods=['POST'])
@@ -233,6 +313,7 @@ def delete_file(filename):
     path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     if os.path.exists(path):
         os.remove(path)
+        del_pin(filename)
         flash(f'{filename} を削除しました')
     else:
         flash('ファイルが見つかりません')
