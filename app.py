@@ -37,10 +37,13 @@ HTML = '''
   <main style="padding:2rem;max-width:700px;margin:auto;">
     <section>
       <h2>ファイルを送信</h2>
-      <form method="post" enctype="multipart/form-data">
+      <form id="uploadForm" enctype="multipart/form-data">
         <input type="file" name="file" class="input" multiple>
         <button class="btn btn-primary" type="submit">アップロード</button>
       </form>
+      <div id="progress-container" style="width:100%;background:#eee;border-radius:6px;display:none;margin:1em 0;">
+        <div id="progress-bar" style="height:12px;width:0;background:var(--primary);border-radius:6px;"></div>
+      </div>
       <script>
       // ドラッグ＆ドロップ対応
       const input = document.querySelector('input[type=file]');
@@ -49,6 +52,29 @@ HTML = '''
         e.preventDefault();
         input.files = e.dataTransfer.files;
       });
+      // アップロード進捗バー
+      document.getElementById('uploadForm').onsubmit = function(e) {
+        e.preventDefault();
+        const form = e.target;
+        const data = new FormData(form);
+        const xhr = new XMLHttpRequest();
+        const bar = document.getElementById('progress-bar');
+        const container = document.getElementById('progress-container');
+        bar.style.width = '0';
+        container.style.display = 'block';
+        xhr.upload.onprogress = function(evt) {
+          if (evt.lengthComputable) {
+            const percent = (evt.loaded / evt.total) * 100;
+            bar.style.width = percent + '%';
+          }
+        };
+        xhr.onload = function() {
+          container.style.display = 'none';
+          location.reload();
+        };
+        xhr.open('POST', '/', true);
+        xhr.send(data);
+      };
       </script>
       {% with messages = get_flashed_messages() %}
         {% if messages %}
@@ -61,13 +87,52 @@ HTML = '''
       <ul class="list">
         {% for filename in files %}
         <li class="list-item">
-          <a href="/download/{{ filename }}" class="btn btn-secondary">{{ filename }}</a>
+          <a href="/download/{{ filename }}" class="btn btn-secondary" download onclick="showDownloadProgress(event, '{{ filename }}')">{{ filename }}</a>
           <form method="post" action="/delete/{{ filename }}" style="display:inline;margin-left:1em;">
             <button class="btn btn-error" type="submit" onclick="return confirm('本当に削除しますか？');">削除</button>
           </form>
         </li>
         {% else %}
         <li class="list-item">ファイルなし</li>
+        {% endfor %}
+      </ul>
+      <div id="dl-progress-container" style="width:100%;background:#eee;border-radius:6px;display:none;margin:1em 0;">
+        <div id="dl-progress-bar" style="height:12px;width:0;background:var(--success);border-radius:6px;"></div>
+      </div>
+      <script>
+      // ダウンロード進捗バー（簡易）
+      function showDownloadProgress(e, filename) {
+        const bar = document.getElementById('dl-progress-bar');
+        const container = document.getElementById('dl-progress-container');
+        bar.style.width = '0';
+        container.style.display = 'block';
+        fetch(`/download/${filename}`).then(resp => {
+          const reader = resp.body.getReader();
+          const contentLength = +resp.headers.get('Content-Length');
+          let received = 0;
+          function pump() {
+            return reader.read().then(({done, value}) => {
+              if (done) {
+                container.style.display = 'none';
+                return;
+              }
+              received += value.length;
+              bar.style.width = (received / contentLength * 100) + '%';
+              return pump();
+            });
+          }
+          return pump();
+        });
+      }
+      </script>
+    </section>
+    <section style="margin-top:2rem;">
+      <h2>転送履歴（直近10件）</h2>
+      <ul class="list">
+        {% for item in history %}
+        <li class="list-item">{{ item }}</li>
+        {% else %}
+        <li class="list-item">履歴なし</li>
         {% endfor %}
       </ul>
     </section>
@@ -94,6 +159,31 @@ def get_local_ip():
                     return ip
     return '127.0.0.1'
 
+HISTORY_FILE = 'transfer_history.json'
+
+# 転送履歴の保存
+import json
+def add_history(entry):
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                hist = json.load(f)
+        else:
+            hist = []
+    except Exception:
+        hist = []
+    hist.insert(0, entry)
+    hist = hist[:10]
+    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(hist, f, ensure_ascii=False)
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -109,6 +199,7 @@ def index():
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
                 file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                add_history(f"受信: {filename}")
                 saved += 1
         if saved:
             flash(f'{saved} ファイルを受信しました')
@@ -118,7 +209,9 @@ def index():
     files = os.listdir(app.config['UPLOAD_FOLDER'])
     local_ip = get_local_ip()
     access_url = f'http://{local_ip}:5000/'
-    return render_template_string(HTML, files=files, access_url=access_url)
+    history = load_history()
+    return render_template_string(HTML, files=files, access_url=access_url, history=history)
+
 
 @app.route('/qr')
 def qr():
@@ -132,6 +225,7 @@ def qr():
 
 @app.route('/download/<filename>')
 def download_file(filename):
+    add_history(f"ダウンロード: {filename}")
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 @app.route('/delete/<filename>', methods=['POST'])
