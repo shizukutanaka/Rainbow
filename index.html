@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rainbow CSS デモ</title>
+  <link rel="stylesheet" href="rainbow.css">
+  <style>body{background:#fafaff;}</style>
+</head>
+<body>
+  <header style="padding:2rem 1rem 1rem 1rem;">
+    <h1 style="color:var(--primary);">Rainbow CSS デモ</h1>
+    <p>市販レベルのUIコンポーネント例（ボタン・フォーム・リスト・通知など）</p>
+  </header>
+  <main style="padding:2rem;max-width:700px;margin:auto;">
+    <section>
+      <h2>ボタン</h2>
+      <button class="btn btn-primary">Primary</button>
+      <button class="btn btn-secondary">Secondary</button>
+      <button class="btn btn-success">Success</button>
+      <button class="btn btn-warning">Warning</button>
+      <button class="btn btn-error">Error</button>
+    </section>
+    <section style="margin-top:2rem;">
+      <h2>フォーム</h2>
+      <form style="display:grid;gap:1rem;max-width:400px;">
+        <label>名前<input type="text" class="input"></label>
+        <label>メール<input type="email" class="input"></label>
+        <label>パスワード<input type="password" class="input"></label>
+        <button class="btn btn-primary" type="submit">送信</button>
+      </form>
+    </section>
+    <section style="margin-top:2rem;">
+      <h2>リスト</h2>
+      <ul class="list">
+        <li class="list-item">ファイルA.txt</li>
+        <li class="list-item">ファイルB.jpg</li>
+        <li class="list-item">ファイルC.pdf</li>
+      </ul>
+    </section>
+    <section style="margin-top:2rem;">
+      <h2>通知</h2>
+      <div class="alert alert-success">ファイル転送が完了しました！</div>
+      <div class="alert alert-error">エラーが発生しました。</div>
+    </section>
+  </main>
+  <footer style="text-align:center;padding:2rem 1rem 1rem 1rem;color:#888;">
+    &copy; 2025 Rainbow Software Inc. | <a href="https://github.com/your-repo" target="_blank">GitHub</a>
+  </footer>
+</body>
+</html>
