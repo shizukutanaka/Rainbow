@@ -2,6 +2,8 @@ import os
 import io
 import qrcode
 import netifaces
+import threading
+import webbrowser
 from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
 
@@ -21,26 +23,33 @@ HTML = '''
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rainbow ファイル転送</title>
   <link rel="stylesheet" href="/static/rainbow.css">
-  <style>body{background:#fafaff;}</style>
+  <style>
+    body { background: #fafaff; }
+    .main-wrap { padding: 2rem 1rem; max-width: 520px; margin: auto; }
+    .qr-block { margin: 1.5rem 0 2rem 0; text-align: center; }
+    .qr-block img { width: 120px; height: 120px; border: 1px solid #ddd; background: #fff; }
+    .file-list { margin-top: 1.5rem; }
+    .alert { margin: 1em 0; }
+    @media (max-width: 600px) { .main-wrap { padding: 1rem 0.5rem; } }
+  </style>
 </head>
 <body>
-  <header style="padding:2rem 1rem 1rem 1rem;">
-    <h1 style="color:var(--primary);">Rainbow ファイル転送</h1>
-    <p>この端末 ⇔ 他端末（スマホ/PC）でファイルをやり取りできます</p>
-    <div style="margin-top:1rem;">
-      <span>スマホからアクセス：</span>
-      <img src="/qr" alt="QRコード" style="vertical-align:middle;width:120px;height:120px;border:1px solid #ddd;background:#fff;">
-      <br>
-      <span style="font-size:0.9em;color:#555;">URL: {{ access_url }}</span>
+  <header style="padding:2rem 1rem 0.5rem 1rem;text-align:center;">
+    <h1 style="color:var(--primary);font-size:2.2em;">Rainbow ファイル転送</h1>
+    <div class="qr-block">
+      <div style="margin-bottom:0.5em;">スマホからアクセス：</div>
+      <img src="/qr" alt="QRコード">
+      <div style="font-size:0.95em;color:#555;margin-top:0.5em;">URL: <span style="user-select:all;">{{ access_url }}</span></div>
     </div>
   </header>
-  <main style="padding:2rem;max-width:700px;margin:auto;">
-    <section>
+  <main class="main-wrap">
+    <section style="margin-bottom:2.2em;">
       <h2>ファイルを送信</h2>
-      <form id="uploadForm" enctype="multipart/form-data">
-        <input type="file" name="file" class="input" multiple>
+      <form id="uploadForm" enctype="multipart/form-data" style="display:flex;gap:0.7em;align-items:center;flex-wrap:wrap;">
+        <input type="file" name="file" class="input" multiple style="flex:1;min-width:180px;">
         <button class="btn btn-primary" type="submit">アップロード</button>
       </form>
+      <div style="font-size:0.95em;color:#888;margin-top:0.3em;">※ 複数ファイル選択・ドラッグ＆ドロップ対応</div>
       <div id="progress-container" style="width:100%;background:#eee;border-radius:6px;display:none;margin:1em 0;">
         <div id="progress-bar" style="height:12px;width:0;background:var(--primary);border-radius:6px;"></div>
       </div>
@@ -82,13 +91,14 @@ HTML = '''
         {% endif %}
       {% endwith %}
     </section>
-    <section style="margin-top:2rem;">
-      <h2>受信ファイル一覧</h2>
+    <section class="file-list">
+      <h2 style="margin-bottom:0.7em;">受信ファイル一覧</h2>
       <ul class="list">
         {% for filename in files %}
-        <li class="list-item">
-          <a href="/download/{{ filename }}" class="btn btn-secondary" download>{{ filename }}</a>
-          <form method="post" action="/delete/{{ filename }}" style="display:inline;margin-left:1em;">
+        <li class="list-item" style="display:flex;align-items:center;gap:1em;justify-content:space-between;">
+          <span style="flex:1;overflow-wrap:anywhere;">{{ filename }}</span>
+          <a href="/download/{{ filename }}" class="btn btn-secondary" download>ダウンロード</a>
+          <form method="post" action="/delete/{{ filename }}" style="display:inline;">
             <button class="btn btn-error" type="submit" onclick="return confirm('本当に削除しますか？');">削除</button>
           </form>
         </li>
@@ -96,7 +106,6 @@ HTML = '''
         <li class="list-item">ファイルなし</li>
         {% endfor %}
       </ul>
-      
     </section>
     <section style="margin-top:2rem;">
       <h2>転送履歴（直近10件）</h2>
@@ -126,11 +135,15 @@ def get_local_ip():
         addrs = netifaces.ifaddresses(iface)
         if netifaces.AF_INET in addrs:
             for addr in addrs[netifaces.AF_INET]:
-                ip = addr.get('addr')
-                if ip and not ip.startswith('127.'):
+                ip = addr['addr']
+                if ip != '127.0.0.1' and not ip.startswith('169.'):
                     return ip
     return '127.0.0.1'
 
+def open_browser():
+    ip = get_local_ip()
+    url = f'http://{ip}:5000/'
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -146,7 +159,15 @@ def index():
         for file in files:
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                base, ext = os.path.splitext(filename)
+                count = 1
+                # 同名ファイルがあれば _1, _2... で回避
+                while os.path.exists(save_path):
+                    filename = f"{base}_{count}{ext}"
+                    save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                    count += 1
+                file.save(save_path)
                 saved += 1
         if saved:
             flash(f'{saved} ファイルを受信しました')
@@ -189,4 +210,5 @@ def send_static(path):
     return send_from_directory('.', path)
 
 if __name__ == '__main__':
+    open_browser()
     app.run(host='0.0.0.0', port=5000, debug=False)
