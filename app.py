@@ -38,9 +38,18 @@ HTML = '''
     <section>
       <h2>ファイルを送信</h2>
       <form method="post" enctype="multipart/form-data">
-        <input type="file" name="file" class="input">
+        <input type="file" name="file" class="input" multiple>
         <button class="btn btn-primary" type="submit">アップロード</button>
       </form>
+      <script>
+      // ドラッグ＆ドロップ対応
+      const input = document.querySelector('input[type=file]');
+      input.addEventListener('dragover', e => { e.preventDefault(); });
+      input.addEventListener('drop', e => {
+        e.preventDefault();
+        input.files = e.dataTransfer.files;
+      });
+      </script>
       {% with messages = get_flashed_messages() %}
         {% if messages %}
           <div class="alert alert-success">{{ messages[0] }}</div>
@@ -53,6 +62,9 @@ HTML = '''
         {% for filename in files %}
         <li class="list-item">
           <a href="/download/{{ filename }}" class="btn btn-secondary">{{ filename }}</a>
+          <form method="post" action="/delete/{{ filename }}" style="display:inline;margin-left:1em;">
+            <button class="btn btn-error" type="submit" onclick="return confirm('本当に削除しますか？');">削除</button>
+          </form>
         </li>
         {% else %}
         <li class="list-item">ファイルなし</li>
@@ -88,18 +100,21 @@ def index():
         if 'file' not in request.files:
             flash('ファイルが選択されていません')
             return redirect(request.url)
-        file = request.files['file']
-        if file.filename == '':
+        files = request.files.getlist('file')
+        if not files or files[0].filename == '':
             flash('ファイルが選択されていません')
             return redirect(request.url)
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            flash(f'{filename} を受信しました')
-            return redirect(url_for('index'))
+        saved = 0
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                saved += 1
+        if saved:
+            flash(f'{saved} ファイルを受信しました')
         else:
             flash('許可されていないファイル形式です')
-            return redirect(request.url)
+        return redirect(url_for('index'))
     files = os.listdir(app.config['UPLOAD_FOLDER'])
     local_ip = get_local_ip()
     access_url = f'http://{local_ip}:5000/'
@@ -118,6 +133,16 @@ def qr():
 @app.route('/download/<filename>')
 def download_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
+
+@app.route('/delete/<filename>', methods=['POST'])
+def delete_file(filename):
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    if os.path.exists(path):
+        os.remove(path)
+        flash(f'{filename} を削除しました')
+    else:
+        flash('ファイルが見つかりません')
+    return redirect(url_for('index'))
 
 @app.route('/static/<path:path>')
 def send_static(path):
